@@ -28,15 +28,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install "capstone>=5,<6" lz4 fonttools requests pillow
 
-      - name: Scarica game_dump.zip da Pixeldrain
+      - name: Scarica assets_backup.zip da Pixeldrain
         run: |
           PD_ID="${{ github.event.inputs.pixeldrain_id }}"
-          echo "Downloading game_dump.zip from Pixeldrain (ID: $PD_ID)..."
+          echo "Downloading assets_backup.zip from Pixeldrain (ID: $PD_ID)..."
           
-          curl -L "https://pixeldrain.com/api/file/$PD_ID" -o game_dump.zip
+          curl -L "https://pixeldrain.com/api/file/$PD_ID" -o assets_backup.zip
           
           mkdir -p game_dump
-          unzip -q game_dump.zip -d game_dump
+          unzip -q assets_backup.zip -d game_dump
           
           if [ ! -d "game_dump/exefs" ]; then
             SUBDIR=$(find game_dump -iname "exefs" -type d | head -n 1 | xargs dirname)
@@ -81,4 +81,3 @@ jobs:
           name: Pokopia-iOS-IPA
           path: Pokopia-iOS-unsigned.ipa
           retention-days: 1
-
