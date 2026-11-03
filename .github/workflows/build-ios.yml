@@ -1,0 +1,88 @@
+﻿name: Build Pokopia iOS IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      gdrive_id:
+        description: 'Google Drive File ID for game_dump.zip'
+        required: true
+        default: '1WDMArlNey_wq-0oPtc509BNrJ26pFEGZ'
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          repository: xFractals/pokopia-native
+          submodules: recursive
+
+      - name: Crea ambiente virtuale e installa dipendenze
+        run: |
+          brew install xcodegen || true
+          python3 -m venv venv
+          source venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install "capstone>=5,<6" lz4 fonttools requests pillow
+
+      - name: Scarica game_dump.zip da Google Drive
+        run: |
+          FILE_ID="${{ github.event.inputs.gdrive_id }}"
+          echo "Downloading game_dump.zip from Google Drive (ID: $FILE_ID)..."
+          
+          CONFIRM=$(curl -sc /tmp/cookie "https://drive.google.com/uc?export=download&id=$FILE_ID" | grep -o 'confirm=[0-9A-Za-z_]*' | sed 's/confirm=//')
+          if [ -z "$CONFIRM" ]; then
+            curl -L "https://drive.google.com/uc?export=download&id=$FILE_ID" -o game_dump.zip
+          else
+            curl -Lb /tmp/cookie "https://drive.google.com/uc?export=download&confirm=$CONFIRM&id=$FILE_ID" -o game_dump.zip
+          fi
+          
+          mkdir -p game_dump
+          unzip -q game_dump.zip -d game_dump
+          
+          if [ ! -d "game_dump/exefs" ]; then
+            SUBDIR=$(find game_dump -iname "exefs" -type d | head -n 1 | xargs dirname)
+            if [ -n "$SUBDIR" ] && [ "$SUBDIR" != "game_dump" ]; then
+              mv "$SUBDIR"/* game_dump/
+            fi
+          fi
+
+      - name: Configura toolchain NxNative
+        run: |
+          source venv/bin/activate
+          export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+          python nx2.py setup
+
+      - name: Patch avanzata per incompatibilità Metal e lodBias
+        run: |
+          find . -name "*.m" -o -name "*.h" | xargs sed -i '' '/sd.lodBias/d' || true
+          find . -name "*.m" -o -name "*.h" | xargs sed -i '' 's/\[enc setArgumentTable:/\[/g' || true
+
+      - name: Esegui nx2.py build
+        run: |
+          source venv/bin/activate
+          export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+          python nx2.py build "./game_dump" --xcode --team-id "0000000000"
+
+      - name: Compila .app iOS e crea pacchetto .ipa
+        run: |
+          XCODEPROJ=$(find . -name "*.xcodeproj" | head -n 1)
+          if [ -n "$XCODEPROJ" ]; then
+            SCHEME=$(xcodebuild -project "$XCODEPROJ" -list | awk '/Schemes:/{flag=1;next} flag && NF {print $1; exit}')
+            xcodebuild -project "$XCODEPROJ" -scheme "$SCHEME" -configuration Release -sdk iphoneos -derivedDataPath ./build_ios CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO AD_HOC_CODE_SIGNING_ALLOWED=YES
+          fi
+          APP_PATH=$(find ./build_ios ./out -name "*.app" -type d 2>/dev/null | grep -i -v "macos" | head -n 1)
+          APP_PATH="${APP_PATH:-$(find . -name "*.app" -type d | head -n 1)}"
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r -9 Pokopia-iOS-unsigned.ipa Payload
+
+      - name: Carica IPA negli Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pokopia-iOS-IPA
+          path: Pokopia-iOS-unsigned.ipa
+          retention-days: 1
